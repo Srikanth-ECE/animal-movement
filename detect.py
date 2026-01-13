@@ -1,176 +1,171 @@
+
 import cv2
-import time
-import winsound
 from ultralytics import YOLO
+from datetime import datetime
+import time
+import os
 
-# ================== LOAD MODELS ==================
-detector = YOLO("yolov8n.pt")                     # Object detection
-classifier = YOLO("runs/classify/train4/weights/best.pt")  # Animal classifier
+# ============================
+# LOAD YOLOv8 MODEL
+# ============================
+model = YOLO("yolov8n.pt")
 
-# ================== CATEGORIES ==================
+# ============================
+# CAMERA
+# ============================
+cap = cv2.VideoCapture(0)
+
+# ============================
+# CREATE CAPTURE DIRECTORIES
+# ============================
+os.makedirs("captures/restricted_animals", exist_ok=True)
+os.makedirs("captures/safe_humans", exist_ok=True)
+
+# ============================
+# ANIMAL CATEGORIES
+# ============================
 WILD_ANIMALS = [
-    "bear", "cheetah", "elephant", "leopard",
-    "lion", "tiger", "wolf", "bison"
+    "elephant", "tiger", "lion", "leopard",
+    "bear", "wolf", "zebra", "giraffe"
 ]
 
-DOMESTIC_ANIMALS = ["cow", "dog", "rooster", "sheep"]
+DOMESTIC_ANIMALS = [
+    "cow", "dog", "sheep", "horse", "cat"
+]
 
-# ================== CAMERA ==================
-cap = cv2.VideoCapture(0)
-last_beep_time = 0
+# ============================
+# TRACKING MEMORY
+# ============================
+previous_positions = {}
 
-# ================== OPENCV MODULES ==================
-bg = cv2.createBackgroundSubtractorMOG2()
+# ============================
+# TIMERS
+# ============================
+last_alert_time = 0
+last_animal_capture_time = 0
+last_human_capture_time = 0
 
-# HOG + SVM (Human pre-filter)
-hog = cv2.HOGDescriptor()
-hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+ALERT_INTERVAL = 5        # seconds
+CAPTURE_INTERVAL = 10     # seconds
 
-# Restricted zone
-ZONE = (200, 120, 450, 360)  # x1, y1, x2, y2
-
-# ================== MAIN LOOP ==================
+# ============================
+# MAIN LOOP
+# ============================
 while True:
     ret, frame = cap.read()
     if not ret:
         break
 
+    h, w, _ = frame.shape
+    mid_x = w // 2
+
+    # ============================
+    # DRAW ZONES (50 / 50)
+    # ============================
+    cv2.rectangle(frame, (0, 0), (mid_x, h), (0, 0, 255), 3)
+    cv2.putText(frame, "RESTRICTED ZONE", (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+
+    cv2.rectangle(frame, (mid_x, 0), (w, h), (0, 255, 0), 3)
+    cv2.putText(frame, "SAFE ZONE", (mid_x + 20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 3)
+
     status = "SAFE"
-    color = (0, 255, 0)
+    status_color = (0, 255, 0)
 
-    # ---------- BACKGROUND SUBTRACTION ----------
-    fgmask = bg.apply(frame)
-    _, thresh = cv2.threshold(fgmask, 200, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(
-        thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
+    # ============================
+    # YOLO DETECTION
+    # ============================
+    results = model(frame, verbose=False)
 
-    motion_detected = len(contours) > 5
+    for r in results:
+        for box in r.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            label = model.names[cls_id]
 
-    # Draw restricted zone
-    zx1, zy1, zx2, zy2 = ZONE
-    cv2.rectangle(frame, (zx1, zy1), (zx2, zy2), (0, 0, 255), 2)
+            if conf < 0.5:
+                continue
 
-    if motion_detected:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            cx = (x1 + x2) // 2
 
-        # ---------- HOG + SVM (HUMAN PRE-FILTER) ----------
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        hog_boxes, _ = hog.detectMultiScale(
-            gray,
-            winStride=(8, 8),
-            padding=(8, 8),
-            scale=1.05
-        )
+            # ============================
+            # MOVEMENT DIRECTION
+            # ============================
+            direction = "STATIONARY"
+            if label in previous_positions:
+                prev_x = previous_positions[label]
+                if cx > prev_x + 15:
+                    direction = "LEFT → RIGHT"
+                elif cx < prev_x - 15:
+                    direction = "RIGHT → LEFT"
 
-        # Filter tiny / poster / phone detections
-        hog_boxes = [
-            (x, y, w, h) for (x, y, w, h) in hog_boxes
-            if w > 80 and h > 150
-        ]
+            previous_positions[label] = cx
 
-        # ---------- YOLO VERIFICATION ----------
-        detections = detector(frame, verbose=False)
-        yolo_person_detected = False
+            inside_restricted = cx < mid_x
+            inside_safe = cx >= mid_x
 
-        for det in detections:
-            for box in det.boxes:
-                label = detector.names[int(box.cls[0])]
-                if label == "person":
-                    yolo_person_detected = True
-                    break
+            current_time = time.time()
+            timestamp = datetime.now().strftime("%H:%M:%S")
 
-        # ---------- CONFIRMED HUMAN ----------
-        if len(hog_boxes) > 0 and yolo_person_detected:
-            status = "HUMAN DETECTED"
-            color = (0, 255, 0)
+            # ============================
+            # WILD ANIMAL IN RESTRICTED ZONE
+            # ============================
+            if label in WILD_ANIMALS and inside_restricted:
 
-            for (hx, hy, hw, hh) in hog_boxes:
-                cv2.rectangle(
-                    frame,
-                    (hx, hy),
-                    (hx + hw, hy + hh),
-                    (255, 0, 0),
-                    2
-                )
+                status = f"ALERT: WILD {label.upper()}"
+                status_color = (0, 0, 255)
 
-        else:
-            # ---------- ANIMAL PIPELINE ----------
-            for det in detections:
-                for box in det.boxes:
-                    cls_id = int(box.cls[0])
-                    conf = float(box.conf[0])
-                    label = detector.names[cls_id]
+                if current_time - last_alert_time >= ALERT_INTERVAL:
+                    print(f"[{timestamp}] ALERT → WILD {label.upper()} | RESTRICTED ZONE | {direction}")
+                    last_alert_time = current_time
 
-                    if conf < 0.5 or label == "person":
-                        continue
+                if current_time - last_animal_capture_time >= CAPTURE_INTERVAL:
+                    filename = f"captures/restricted_animals/{label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                    cv2.imwrite(filename, frame)
+                    print(f" Captured animal image: {filename}")
+                    last_animal_capture_time = current_time
 
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    cropped = frame[y1:y2, x1:x2]
+            # ============================
+            # HUMAN IN SAFE ZONE
+            # ============================
+            if label == "person" and inside_safe:
+                if current_time - last_human_capture_time >= CAPTURE_INTERVAL:
+                    filename = f"captures/safe_humans/HUMAN_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                    cv2.imwrite(filename, frame)
+                    print(f"📸 Captured human image: {filename}")
+                    last_human_capture_time = current_time
 
-                    if cropped.size == 0:
-                        continue
+            # ============================
+            # DRAW BOX
+            # ============================
+            box_color = (0, 0, 255) if inside_restricted else (0, 255, 0)
 
-                    # ---------- YOLO CLASSIFICATION ----------
-                    results = classifier(cropped, verbose=False)
-                    probs = results[0].probs
-                    if probs is None:
-                        continue
+            cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+            cv2.putText(
+                frame,
+                f"{label.upper()} | {direction}",
+                (x1, y1 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                box_color,
+                2
+            )
 
-                    animal = classifier.names[probs.top1].lower()
-                    confidence = float(probs.top1conf)
-
-                    if confidence < 0.6:
-                        status = "UNKNOWN OBJECT"
-                        continue
-
-                    # Draw bounding box
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(
-                        frame,
-                        f"{animal.upper()} {confidence:.2f}",
-                        (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (0, 255, 0),
-                        2
-                    )
-
-                    # Zone check
-                    cx = (x1 + x2) // 2
-                    cy = (y1 + y2) // 2
-                    inside_zone = zx1 < cx < zx2 and zy1 < cy < zy2
-
-                    if animal in WILD_ANIMALS:
-                        status = f"WILD ANIMAL ({animal.upper()})"
-                        color = (0, 0, 255)
-
-                        if inside_zone:
-                            current_time = time.time()
-                            if current_time - last_beep_time >= 3:
-                                winsound.Beep(1500, 500)
-                                last_beep_time = current_time
-                                print(f"⚠️ ALERT: {animal} in restricted zone")
-
-                    elif animal in DOMESTIC_ANIMALS:
-                        status = f"DOMESTIC ANIMAL ({animal.upper()})"
-                        color = (0, 255, 0)
-
-    # ---------- DISPLAY ----------
-    cv2.putText(
-        frame,
-        status,
-        (20, 40),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        color,
-        2
-    )
+    # ============================
+    # STATUS DISPLAY
+    # ============================
+    cv2.putText(frame, status, (20, h - 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, status_color, 3)
 
     cv2.imshow("AI & IoT Animal Movement Detection – PS38", frame)
 
     if cv2.waitKey(1) & 0xFF == 27:
         break
 
-# ================== CLEANUP ==================
+# ============================
+# CLEANUP
+# ============================
 cap.release()
 cv2.destroyAllWindows()
