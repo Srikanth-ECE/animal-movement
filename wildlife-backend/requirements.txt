@@ -1,0 +1,6 @@
+Flask==2.3.3
+python-dotenv==1.0.0
+requests==2.31.0  # For Telegram
+Flask-SQLAlchemy==3.0.5
+Flask-SocketIO==5.3.4
+Flask-CORS==4.0.0

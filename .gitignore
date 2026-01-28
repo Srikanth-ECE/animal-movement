@@ -1,0 +1,114 @@
+# Root level .gitignore
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Documentation
+docs/_build/
+_site/
+
+# Project documentation
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+
+# Images (except those in public folders)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+!**/public/**/*.png
+!**/public/**/*.jpg
+!**/public/**/*.jpeg
+!**/public/**/*.gif
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+
+# Database dumps
+*.dump
+*.sql
+*.backup
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Secret files
+secrets.json
+credentials.json
+config.json
+
+# Project-specific
+*.db
+*.sqlite
+*.db-journal
+
+# Backend-specific (Flask)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Frontend-specific (Node)
+node_modules/
+dist/
+build/
+.cache/
+.vite/
+
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+
+# Package manager lock files (optional - include if you want to track them)
+# !package-lock.json
+# !yarn.lock
+# !pnpm-lock.yaml
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
