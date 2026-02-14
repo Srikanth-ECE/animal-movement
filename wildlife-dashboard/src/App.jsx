@@ -11,13 +11,13 @@ import Alert from '@mui/material/Alert';
 import CircularProgress from '@mui/material/CircularProgress';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
+import CardMedia from '@mui/material/CardMedia';
 import IconButton from '@mui/material/IconButton';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import LocationOnIcon from '@mui/icons-material/LocationOn';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import PetsIcon from '@mui/icons-material/Pets';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
-import WarningIcon from '@mui/icons-material/Warning';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import WifiIcon from '@mui/icons-material/Wifi';
 import WifiOffIcon from '@mui/icons-material/WifiOff';
@@ -32,6 +32,9 @@ import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import FormControl from '@mui/material/FormControl';
 import InputLabel from '@mui/material/InputLabel';
+import ImageIcon from '@mui/icons-material/Image';
+import ZoomInIcon from '@mui/icons-material/ZoomIn';
+import DownloadIcon from '@mui/icons-material/Download';
 
 // Import Map Component
 import RealMap from './components/RealMap';
@@ -147,6 +150,8 @@ function App() {
   });
   
   const [selectedAlert, setSelectedAlert] = useState(null);
+  const [imageModalOpen, setImageModalOpen] = useState(false);
+  const [selectedImage, setSelectedImage] = useState(null);
 
   // Load all data
   const loadData = useCallback(async () => {
@@ -181,6 +186,7 @@ function App() {
       setLastUpdate(new Date());
       setLoading(false);
       setRefreshing(false);
+      setNewAlertsCount(0);
     }
   }, [filters]);
 
@@ -188,50 +194,64 @@ function App() {
   useEffect(() => {
     socketService.connect();
     
-    // Listen for real-time alerts
-    const removeAlertListener = socketService.on('new_alert', (newAlert) => {
-      console.log('🎯 Real-time alert received:', newAlert.detection?.species);
-      
-      // Add to alerts list
-      setAlerts(prev => [newAlert, ...prev.slice(0, 49)]);
-      
-      // Increment new alerts count
+
+  // Listen for real-time alerts
+  const removeAlertListener = socketService.on('new_alert', (newAlert) => {
+    console.log('😂 Real-time alert received:', new Date().toLocaleString());
+    console.log('🎯 Species:', newAlert.detection?.species);
+    
+    setAlerts(prevAlerts => {
+      const exists = prevAlerts.some(alert => alert.id === newAlert.id);
+      if (exists) return prevAlerts;
+
+      // Increment badge ONLY for new alert
       setNewAlertsCount(prev => prev + 1);
-      
-      // Update timestamp
-      setLastUpdate(new Date());
-      
-      // Show notification for critical alerts
-      if (newAlert.detection?.priority === 'critical') {
-        if ('Notification' in window && Notification.permission === 'granted') {
-          new Notification(`🚨 ${newAlert.detection.display_name} Detected`, {
-            body: `Critical alert at ${new Date(newAlert.timestamp).toLocaleTimeString()}`,
+
+      // Browser notification ONLY for new critical alerts
+      if (
+        newAlert.detection?.priority === 'critical' &&
+        'Notification' in window &&
+        Notification.permission === 'granted'
+      ) {
+        new Notification(
+          `🚨 ${newAlert.detection?.display_name || 'Animal'} Detected`,
+          {
+            body: `Critical alert at ${new Date(
+              newAlert.timestamp
+            ).toLocaleTimeString()}`,
             icon: '/notification-icon.png',
-          });
-        }
+          }
+        );
       }
+
+      return [newAlert, ...prevAlerts];
     });
-    
-    // Check connection status
-    const interval = setInterval(() => {
-      setSocketConnected(socketService.isConnected());
-    }, 2000);
-    
-    // Initial data load
-    loadData();
-    
-    // Request notification permission
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-    
-    // Cleanup
-    return () => {
-      clearInterval(interval);
-      removeAlertListener();
-      socketService.disconnect();
-    };
-  }, [loadData]);
+
+    // Update last update time
+    setLastUpdate(new Date());
+  });
+
+  // Check socket connection status
+  const interval = setInterval(() => {
+    setSocketConnected(socketService.isConnected());
+  }, 2000);
+
+  // Initial data load
+  loadData();
+
+  // Request notification permission
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+
+  // Cleanup
+  return () => {
+    clearInterval(interval);
+    removeAlertListener();
+    socketService.disconnect();
+  };
+}, [loadData]);
+
 
   // Handle tab change
   const handleTabChange = (event, newValue) => {
@@ -260,6 +280,25 @@ function App() {
     }
   };
 
+  // Open image modal
+  const handleOpenImageModal = (alert) => {
+    setSelectedImage(alert.image_url);
+    setSelectedAlert(alert);
+    setImageModalOpen(true);
+  };
+
+  // Download image
+  const handleDownloadImage = (alert) => {
+    if (alert.image_url) {
+      const link = document.createElement('a');
+      link.href = alert.image_url;
+      link.download = `wildlife_alert_${alert.id}_${alert.detection?.species || 'unknown'}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
   // Filter alerts based on current filters
   const filteredAlerts = alerts.filter(alert => {
     // Priority filter
@@ -282,10 +321,17 @@ function App() {
     const now = new Date();
     const hoursDiff = (now - alertTime) / (1000 * 60 * 60);
     
-    if (filters.timeframe === '1h' && hoursDiff > 1) return false;
-    if (filters.timeframe === '24h' && hoursDiff > 24) return false;
-    if (filters.timeframe === '7d' && hoursDiff > 168) return false;
-    
+    if (filters.timeframe !== 'all') {
+      const limits = {
+        '1h': 1,
+        '24h': 24,
+        '7d': 168,
+      };
+
+      if (limits[filters.timeframe] && hoursDiff > limits[filters.timeframe]) {
+        return false;
+      }
+    }
     return true;
   });
 
@@ -298,6 +344,11 @@ function App() {
   // Get critical alerts count
   const criticalAlertsCount = filteredAlerts.filter(
     alert => alert.detection?.priority === 'critical'
+  ).length;
+
+  // Get alerts with images count
+  const alertsWithImagesCount = alerts.filter(
+    alert => alert.has_image || alert.image_url
   ).length;
 
   // Format time
@@ -317,6 +368,22 @@ function App() {
       return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
     } catch {
       return '--';
+    }
+  };
+
+  // Format full timestamp
+  const formatFullTime = (timestamp) => {
+    try {
+      const date = new Date(timestamp);
+      return date.toLocaleString([], { 
+        month: 'short', 
+        day: 'numeric',
+        hour: '2-digit', 
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    } catch {
+      return 'Unknown time';
     }
   };
 
@@ -597,18 +664,16 @@ function App() {
                   </Grid>
                   
                   <Grid item xs={12} sm={6} md={3}>
-                    <Card>
+                    <Card sx={{ borderLeft: '4px solid #2196f3' }}>
                       <CardContent>
                         <Typography color="textSecondary" gutterBottom variant="body2">
-                          With GPS Locations
+                          With Images
                         </Typography>
                         <Typography variant="h4" color="primary">
-                          {alertsWithLocation.length}
+                          {alertsWithImagesCount}
                         </Typography>
                         <Typography variant="caption" color="textSecondary">
-                          {filteredAlerts.length > 0 
-                            ? `${Math.round((alertsWithLocation.length / filteredAlerts.length) * 100)}% mapped` 
-                            : '0% mapped'}
+                          Captured by cameras
                         </Typography>
                       </CardContent>
                     </Card>
@@ -631,14 +696,14 @@ function App() {
                   </Grid>
                 </Grid>
 
-                {/* Alerts List */}
+                {/* SINGLE ALERTS LIST - ALL ALERTS TOGETHER */}
                 <Paper sx={{ p: 3, boxShadow: 3 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
                     <Typography variant="h5" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       🚨 Recent Wildlife Alerts
                     </Typography>
                     <Typography variant="body2" color="textSecondary">
-                      Showing {filteredAlerts.length} alerts
+                      Showing {filteredAlerts.length} alerts • {alertsWithImagesCount} with images
                     </Typography>
                   </Box>
                   
@@ -653,7 +718,7 @@ function App() {
                     </Box>
                   ) : (
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      {filteredAlerts.slice(0, 15).map((alert) => (
+                      {filteredAlerts.map((alert) => (
                         <Card 
                           key={alert.id} 
                           variant="outlined"
@@ -698,6 +763,15 @@ function App() {
                                       color="warning"
                                     />
                                   )}
+                                  {(alert.has_image || alert.image_url) && (
+                                    <Chip 
+                                      icon={<ImageIcon fontSize="small" />}
+                                      label="IMAGE"
+                                      size="small"
+                                      color="primary"
+                                      variant="outlined"
+                                    />
+                                  )}
                                 </Box>
                                 
                                 {/* Alert Details */}
@@ -724,6 +798,56 @@ function App() {
                                   </Typography>
                                 </Box>
                                 
+                                {/* Image Preview - SHOWN RIGHT IN THE ALERT CARD */}
+                                {(alert.has_image || alert.image_url) && alert.image_url && (
+                                  <Box sx={{ mt: 2, mb: 1 }}>
+                                    <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
+                                      <ImageIcon fontSize="small" /> Captured Image:
+                                    </Typography>
+                                    <Box 
+                                      sx={{ 
+                                        position: 'relative',
+                                        width: '100%',
+                                        maxWidth: 300,
+                                        maxHeight: 200,
+                                        overflow: 'hidden',
+                                        borderRadius: 1,
+                                        cursor: 'pointer',
+                                        '&:hover img': {
+                                          transform: 'scale(1.05)'
+                                        }
+                                      }}
+                                      onClick={() => handleOpenImageModal(alert)}
+                                    >
+                                      <CardMedia
+                                        component="img"
+                                        image={alert.image_url}
+                                        alt={`${alert.detection?.display_name} detection`}
+                                        sx={{ 
+                                          width: '100%',
+                                          height: 'auto',
+                                          objectFit: 'cover',
+                                          transition: 'transform 0.3s'
+                                        }}
+                                      />
+                                      <Box sx={{
+                                        position: 'absolute',
+                                        top: 8,
+                                        right: 8,
+                                        bgcolor: 'rgba(0,0,0,0.5)',
+                                        color: 'white',
+                                        borderRadius: 1,
+                                        p: 0.5,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 0.5
+                                      }}>
+                                        <ZoomInIcon fontSize="small" />
+                                      </Box>
+                                    </Box>
+                                  </Box>
+                                )}
+                                
                                 {/* Additional Info */}
                                 <Box sx={{ mt: 1.5, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                                   <Typography variant="caption" color="textSecondary">
@@ -735,11 +859,16 @@ function App() {
                                   <Typography variant="caption" color="textSecondary">
                                     Alert ID: #{alert.id}
                                   </Typography>
+                                  {(alert.has_image || alert.image_url) && (
+                                    <Typography variant="caption" color="primary" sx={{ fontWeight: 'bold' }}>
+                                      📸 Image Available
+                                    </Typography>
+                                  )}
                                 </Box>
                               </Box>
                               
                               {/* Action Buttons */}
-                              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, ml: 2 }}>
+                              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, ml: 2, minWidth: 120 }}>
                                 {alert.location?.lat && alert.location?.lng && (
                                   <Button 
                                     size="small" 
@@ -749,6 +878,7 @@ function App() {
                                       setSelectedAlert(alert);
                                       setCurrentTab(1); // Switch to map tab
                                     }}
+                                    fullWidth
                                   >
                                     View on Map
                                   </Button>
@@ -760,9 +890,35 @@ function App() {
                                     variant="contained"
                                     color="primary"
                                     onClick={() => handleAcknowledgeAlert(alert.id)}
+                                    fullWidth
                                   >
                                     Acknowledge
                                   </Button>
+                                )}
+
+                                {(alert.has_image || alert.image_url) && (
+                                  <>
+                                    <Button 
+                                      size="small" 
+                                      variant="outlined"
+                                      color="secondary"
+                                      startIcon={<ZoomInIcon />}
+                                      onClick={() => handleOpenImageModal(alert)}
+                                      fullWidth
+                                    >
+                                      View Image
+                                    </Button>
+                                    <Button 
+                                      size="small" 
+                                      variant="outlined"
+                                      color="info"
+                                      startIcon={<DownloadIcon />}
+                                      onClick={() => handleDownloadImage(alert)}
+                                      fullWidth
+                                    >
+                                      Download
+                                    </Button>
+                                  </>
                                 )}
                               </Box>
                             </Box>
@@ -804,7 +960,8 @@ function App() {
               <Typography variant="body2" align="right">
                 Status: {socketConnected ? '🟢 Live WebSocket' : '🔴 WebSocket Offline'} • 
                 Backend: {backendStatus?.connected ? '🟢 Connected' : '🔴 Disconnected'} • 
-                Alerts: {alerts.length}
+                Alerts: {alerts.length} • 
+                Images: {alertsWithImagesCount}
               </Typography>
               <Typography variant="caption" align="right" display="block">
                 Last update: {lastUpdate ? lastUpdate.toLocaleTimeString() : 'Never'}
@@ -813,6 +970,100 @@ function App() {
           </Grid>
         </Box>
       </Container>
+
+      {/* Image Modal */}
+      {selectedImage && (
+        <Modal
+          open={imageModalOpen}
+          onClose={() => setImageModalOpen(false)}
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Box sx={{
+            position: 'relative',
+            width: '90%',
+            maxWidth: 800,
+            maxHeight: '90vh',
+            bgcolor: 'background.paper',
+            borderRadius: 2,
+            boxShadow: 24,
+            p: 0,
+            overflow: 'hidden'
+          }}>
+            <IconButton
+              sx={{
+                position: 'absolute',
+                top: 8,
+                right: 8,
+                bgcolor: 'rgba(0,0,0,0.5)',
+                color: 'white',
+                zIndex: 1,
+                '&:hover': {
+                  bgcolor: 'rgba(0,0,0,0.7)'
+                }
+              }}
+              onClick={() => setImageModalOpen(false)}
+            >
+              ✕
+            </IconButton>
+            <Box sx={{ 
+              display: 'flex', 
+              justifyContent: 'center', 
+              alignItems: 'center',
+              height: '70vh',
+              p: 2
+            }}>
+              <img
+                src={selectedImage}
+                alt="Wildlife detection"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  objectFit: 'contain'
+                }}
+              />
+            </Box>
+            {selectedAlert && (
+              <Box sx={{ 
+                p: 2, 
+                borderTop: 1, 
+                borderColor: 'divider',
+                bgcolor: '#f5f5f5'
+              }}>
+                <Typography variant="subtitle1" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {selectedAlert.detection?.emoji} {selectedAlert.detection?.display_name}
+                </Typography>
+                <Typography variant="body2" color="textSecondary">
+                  Alert #{selectedAlert.id} • {formatFullTime(selectedAlert.timestamp)}
+                </Typography>
+                <Typography variant="body2">
+                  Confidence: {(selectedAlert.detection?.confidence * 100).toFixed(1)}% • 
+                  Priority: {selectedAlert.detection?.priority?.toUpperCase()}
+                </Typography>
+                <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
+                  <Button 
+                    size="small" 
+                    variant="outlined"
+                    onClick={() => window.open(selectedImage, '_blank')}
+                  >
+                    Open in New Tab
+                  </Button>
+                  <Button 
+                    size="small" 
+                    variant="contained"
+                    onClick={() => handleDownloadImage(selectedAlert)}
+                  >
+                    Download Image
+                  </Button>
+                </Box>
+              </Box>
+            )}
+          </Box>
+        </Modal>
+      )}
 
       {/* CSS Animation for Live Badge */}
       <style>

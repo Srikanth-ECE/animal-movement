@@ -1,11 +1,14 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 import os
 import requests
-from datetime import datetime, timedelta
+import base64
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Tuple
+from werkzeug.utils import secure_filename
 
 # ========== CREATE FLASK APP ==========
 app = Flask(__name__)
@@ -16,6 +19,14 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-key-123')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///wildlife_alerts.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Image configuration
+app.config['UPLOAD_FOLDER'] = 'static/images'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max
+app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
+
+# Create upload directory if it doesn't exist
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
 # Initialize extensions 
 db = SQLAlchemy(app)
 socketio = SocketIO(app, cors_allowed_origins="*")  # Enable CORS for SocketIO
@@ -25,6 +36,7 @@ ANIMAL_SPECIES = {
     # Wild Animals (High Priority)
     'elephant': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🐘', 'danger': 'high'},
     'tiger': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🐅', 'danger': 'high'},
+    'lion': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🦁', 'danger': 'high'},
     'leopard': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🐆', 'danger': 'high'},
     'bear': {'category': 'wildlife', 'priority': 'high', 'emoji': '🐻', 'danger': 'high'},
     'wild_boar': {'category': 'wildlife', 'priority': 'high', 'emoji': '🐗', 'danger': 'medium'},
@@ -53,7 +65,7 @@ ANIMAL_SPECIES = {
 
 # ========== TELEGRAM BOT CLASS ==========
 class TelegramBot:
-    """Handles Telegram notifications"""
+    """Handles Telegram notifications with image support"""
     
     def __init__(self):
         self.token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
@@ -61,6 +73,10 @@ class TelegramBot:
         self.enabled = os.getenv('TELEGRAM_ENABLED', 'False').lower() in ('true', '1', 't')
         self.send_images = os.getenv('TELEGRAM_SEND_IMAGES', 'False').lower() in ('true', '1', 't')
         
+        print("DEBUG → TELEGRAM_ENABLED:", self.enabled)
+        print("DEBUG → TELEGRAM_SEND_IMAGES:", self.send_images)
+        print("DEBUG → BOT TOKEN LENGTH:", len(self.token))
+        print("DEBUG → CHAT ID:", self.chat_id)
         # Validate configuration
         self._validate_config()
     
@@ -81,10 +97,11 @@ class TelegramBot:
             return
             
         print(f"✅ Telegram bot configured for chat ID: {self.chat_id}")
+        print(f"📸 Image sending: {'✅ ENABLED' if self.send_images else '❌ DISABLED'}")
     
     def send_alert(self, alert_data: Dict[str, Any]) -> bool:
         """
-        Send alert notification to Telegram
+        Send alert notification to Telegram with image if available
         Returns True if successful, False otherwise
         """
         if not self.enabled:
@@ -94,7 +111,22 @@ class TelegramBot:
             # Format the message
             message = self._format_alert_message(alert_data)
             
-            # Send via Telegram API
+            # Try to send with image first
+            if self.send_images and alert_data.get('image_url'):
+                success = self._send_alert_with_image(alert_data, message)
+                if success:
+                    return True
+            
+            # Fallback to text-only if image fails or not available
+            return self._send_text_alert(message)
+            
+        except Exception as e:
+            print(f"❌ Telegram send error: {e}")
+            return False
+    
+    def _send_text_alert(self, message: str) -> bool:
+        """Send text-only alert to Telegram"""
+        try:
             url = f"https://api.telegram.org/bot{self.token}/sendMessage"
             payload = {
                 'chat_id': self.chat_id,
@@ -106,16 +138,58 @@ class TelegramBot:
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             
-            print(f"✅ Telegram alert sent for {alert_data['detection']['species']}")
+            print(f"✅ Telegram text alert sent")
             return True
             
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Failed to send Telegram alert: {e}")
-            return False
         except Exception as e:
-            print(f"❌ Unexpected error sending Telegram: {e}")
+            print(f"❌ Failed to send Telegram text alert: {e}")
             return False
     
+    def _send_alert_with_image(self, alert_data, caption):
+        try:
+            image_url = alert_data.get('image_url')
+            if not image_url:
+                print("❌ No image_url in alert_data")
+                return False
+
+            # Convert API URL to local file path
+            filename = image_url.split('/')[-1]
+            image_path = os.path.join(
+                os.path.dirname(__file__),
+                "static",
+                "images",
+                filename
+            )
+
+            print("📸 Telegram image path:", image_path)
+
+            if not os.path.exists(image_path):
+                print("❌ Image file not found:", image_path)
+                return False
+
+            url = f"https://api.telegram.org/bot{self.token}/sendPhoto"
+
+            with open(image_path, "rb") as img:
+                response = requests.post(
+                    url,
+                    data={
+                        "chat_id": self.chat_id,
+                        "caption": caption,
+                        "parse_mode": "HTML"
+                    },
+                    files={"photo": img},
+                    timeout=20
+                )
+
+            print("📨 Telegram response:", response.status_code, response.text)
+            return response.ok
+
+        except Exception as e:
+            print("❌ Telegram image send exception:", e)
+            return False
+
+        
+
     def _format_alert_message(self, alert_data: Dict[str, Any]) -> str:
         """Format alert data into a nice Telegram message"""
         detection = alert_data['detection']
@@ -161,6 +235,12 @@ class TelegramBot:
         message += f"<b>Device:</b> {alert_data['device_id']}\n"
         message += f"<b>Alert ID:</b> #{alert_data['id']}\n"
         
+        # Add image info
+        if alert_data.get('image_url'):
+            message += f"<b>Image:</b> ✅ Included\n"
+        else:
+            message += f"<b>Image:</b> ❌ Not available\n"
+        
         # Add location if available
         if location.get('lat') and location.get('lng'):
             lat = location['lat']
@@ -203,10 +283,11 @@ class TelegramBot:
                     'confidence': 0.95
                 },
                 'location': {
-                    'lat': 12.97,
-                    'lng': 79.16
+                    'lat': 12.9716,
+                    'lng': 77.5946
                 },
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.utcnow().isoformat(),
+                'image_url': None
             }
             
             success = self.send_alert(test_data)
@@ -226,7 +307,7 @@ telegram_bot = TelegramBot()
 class Alert(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     device_id = db.Column(db.String(100), nullable=False, default='unknown_device')
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     species = db.Column(db.String(50), nullable=False)
     label = db.Column(db.String(50))
     confidence = db.Column(db.Float, nullable=False, default=0.0)
@@ -239,6 +320,7 @@ class Alert(db.Model):
     acknowledged_by = db.Column(db.String(100))
     notes = db.Column(db.Text)
     has_image = db.Column(db.Boolean, default=False)
+    image_filename = db.Column(db.String(255))  # Stores the image filename
     
     def to_dict(self):
         species_info = ANIMAL_SPECIES.get(self.species, {})
@@ -246,7 +328,7 @@ class Alert(db.Model):
         return {
             'id': self.id,
             'device_id': self.device_id,
-            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+            'timestamp': self.timestamp.astimezone(timezone.utc).isoformat() if self.timestamp else None,
             'detection': {
                 'species': self.species,
                 'label': self.label,
@@ -263,11 +345,43 @@ class Alert(db.Model):
                 'lng': self.longitude
             },
             'has_image': self.has_image,
+            'image_url': (
+                f"http://localhost:5000/api/images/{self.image_filename}" 
+                if self.image_filename else None
+            ),
             'status': self.status,
             'acknowledged_by': self.acknowledged_by
         }
 
 # ========== HELPER FUNCTIONS ==========
+def save_base64_image(base64_string: str, alert_id: int) -> str:
+    """Save base64 image to file and return filename"""
+    try:
+        if not base64_string or 'base64,' not in base64_string:
+            return None
+        
+        # Extract base64 data
+        if ',' in base64_string:
+            header, data = base64_string.split(',', 1)
+        else:
+            data = base64_string
+        
+        # Generate unique filename
+        filename = f"{alert_id}_{uuid.uuid4().hex[:8]}.jpg"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        # Decode and save
+        img_data = base64.b64decode(data)
+        with open(filepath, 'wb') as f:
+            f.write(img_data)
+        
+        print(f"📸 Image saved: {filename}")
+        return filename
+        
+    except Exception as e:
+        print(f"❌ Error saving image: {e}")
+        return None
+
 def normalize_species(label: str) -> Tuple[str, str]:
     label_lower = label.lower().strip()
     
@@ -302,15 +416,17 @@ def parse_pi_data(data: Dict[str, Any]) -> Dict[str, Any]:
     device_id = data.get('device_id', 'unknown_device')
     
     timestamp_str = data.get('timestamp')
-    timestamp = datetime.utcnow()
+    timestamp = datetime.now(timezone.utc)
     
     if timestamp_str:
         try:
             if timestamp_str.endswith('Z'):
-                timestamp_str = timestamp_str[:-1] + '+00:00'
-            timestamp = datetime.fromisoformat(timestamp_str)
-        except ValueError:
-            print(f"⚠️ Could not parse timestamp: {timestamp_str}")
+                timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            else:
+                local_dt = datetime.fromisoformat(timestamp_str)
+                timestamp = local_dt.astimezone(timezone.utc)
+        except Exception as e:
+            print(f"⚠️ Timestamp parse error: {e}")
     
     detection = data.get('detection', {})
     raw_label = detection.get('label', 'unknown')
@@ -325,6 +441,9 @@ def parse_pi_data(data: Dict[str, Any]) -> Dict[str, Any]:
     latitude = location.get('lat')
     longitude = location.get('lng')
     
+    has_image = bool(data.get('image_base64'))
+    image_base64 = data.get('image_base64')
+    
     return {
         'device_id': device_id,
         'timestamp': timestamp,
@@ -336,7 +455,8 @@ def parse_pi_data(data: Dict[str, Any]) -> Dict[str, Any]:
         'longitude': longitude,
         'category': category,
         'priority': species_info['priority'],
-        'has_image': bool(data.get('image_base64'))
+        'has_image': has_image,
+        'image_base64': image_base64
     }
 
 # ========== API ROUTES ==========
@@ -345,13 +465,19 @@ def home():
     return jsonify({
         "message": "Wildlife Alert System Backend",
         "status": "running",
-        "version": "6.0 - With WebSocket Real-time Updates",
+        "version": "7.0 - With Image Support",
         "telegram_enabled": telegram_bot.enabled,
+        "telegram_images": telegram_bot.send_images,
         "websocket_enabled": True,
+        "image_storage": True,
         "endpoints": {
-            "POST /api/alert": "Send detection (triggers WebSocket + Telegram)",
+            "POST /api/alert": "Send detection (with image)",
             "GET /api/alerts": "Get alerts",
+            "GET /api/alerts/<id>": "Get specific alert",
+            "GET /api/images/<filename>": "Get image",
+            "PUT /api/alerts/<id>/status": "Update alert status",
             "GET /api/species": "List detectable species",
+            "GET /api/stats": "Get statistics",
             "GET /api/telegram/test": "Test Telegram connection",
             "GET /api/telegram/status": "Check Telegram status",
             "GET /health": "Health check",
@@ -363,12 +489,17 @@ def home():
 def health_check():
     try:
         alert_count = Alert.query.count()
+        image_count = Alert.query.filter(Alert.image_filename.isnot(None)).count()
+        
         return jsonify({
             "status": "healthy",
             "database": "connected",
             "telegram": telegram_bot.enabled,
+            "telegram_images": telegram_bot.send_images,
             "websocket": True,
+            "image_storage": True,
             "alerts_in_db": alert_count,
+            "alerts_with_images": image_count,
             "time": datetime.utcnow().isoformat()
         })
     except Exception as e:
@@ -389,7 +520,7 @@ def receive_alert():
         # Parse Pi data
         parsed_data = parse_pi_data(data)
         
-        # Create and save alert
+        # Create alert object
         alert = Alert(
             device_id=parsed_data['device_id'],
             timestamp=parsed_data['timestamp'],
@@ -405,18 +536,26 @@ def receive_alert():
         )
         
         db.session.add(alert)
+        db.session.flush()  # Get alert ID before commit
+        
+        # Save image if present
+        if parsed_data['has_image'] and parsed_data.get('image_base64'):
+            image_filename = save_base64_image(
+                parsed_data['image_base64'], 
+                alert.id
+            )
+            if image_filename:
+                alert.image_filename = image_filename
+                alert.has_image = True
+        
         db.session.commit()
         
         # Convert to dict for responses
         alert_dict = alert.to_dict()
         
         # ========== WEBSOCKET BROADCAST ==========
-        # Broadcast to all connected clients
         socketio.emit('new_alert', alert_dict, namespace='/')
         print(f"📡 WebSocket broadcast sent for alert #{alert.id}")
-        
-        # Also send to dashboard room specifically
-        emit('new_alert', alert_dict, room='dashboard', namespace='/')
         # =========================================
         
         # Send Telegram notification
@@ -429,19 +568,21 @@ def receive_alert():
         emoji = species_info.get('emoji', '❓')
         display_name = alert.species.replace('_', ' ').title()
         
-        print(f"\n{emoji} {'='*60}")
+        print(f"\n{'='*60}")
         print(f"{emoji} NEW {alert.priority.upper()} ALERT #{alert.id}")
+        print(f"{emoji} Species: {display_name}")
+        print(f"{emoji} Confidence: {alert.confidence*100:.1f}%")
+        print(f"{emoji} Image: {'✅ SAVED' if alert.image_filename else '❌ NO IMAGE'}")
         print(f"{emoji} WebSocket: ✅ BROADCAST")
         print(f"{emoji} Telegram: {'✅ SENT' if telegram_sent else '⏭️ SKIPPED'}")
         print(f"{emoji} {'='*60}")
-        print(f"   Species: {display_name}")
-        print(f"   Confidence: {alert.confidence*100:.1f}%")
-        print(f"   Device: {alert.device_id}")
         
         return jsonify({
             "message": f"Alert saved: {display_name} detected",
             "alert_id": alert.id,
             "telegram_sent": telegram_sent,
+            "has_image": alert.has_image,
+            "image_url": alert_dict.get('image_url'),
             "websocket_broadcast": True,
             "alert": alert_dict
         }), 201
@@ -449,6 +590,113 @@ def receive_alert():
     except Exception as e:
         db.session.rollback()
         print(f"❌ Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/images/<filename>')
+def serve_image(filename):
+    """Serve uploaded images"""
+    try:
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        if os.path.exists(filepath):
+            return send_file(filepath, mimetype='image/jpeg')
+        else:
+            return jsonify({"error": "Image not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/alerts', methods=['GET'])
+def get_alerts():
+    try:
+        species = request.args.get('species')
+        category = request.args.get('category')
+        priority = request.args.get('priority')
+        has_image = request.args.get('has_image')
+        min_confidence = request.args.get('min_confidence', type=float)
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        
+        query = Alert.query
+        
+        if species:
+            query = query.filter_by(species=species)
+        if category:
+            query = query.filter_by(category=category)
+        if priority:
+            query = query.filter_by(priority=priority)
+        if has_image:
+            if has_image.lower() == 'true':
+                query = query.filter(Alert.has_image == True)
+            elif has_image.lower() == 'false':
+                query = query.filter(Alert.has_image == False)
+        if min_confidence:
+            query = query.filter(Alert.confidence >= min_confidence)
+        
+        total = query.count()
+        alerts = query.order_by(Alert.timestamp.desc()).offset(offset).limit(limit).all()
+        
+        return jsonify({
+            "count": len(alerts),
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "filters": {
+                "species": species,
+                "category": category,
+                "priority": priority,
+                "has_image": has_image,
+                "min_confidence": min_confidence
+            },
+            "alerts": [alert.to_dict() for alert in alerts]
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/alerts/<int:alert_id>', methods=['GET'])
+def get_alert(alert_id):
+    try:
+        alert = Alert.query.get(alert_id)
+        if not alert:
+            return jsonify({"error": "Alert not found"}), 404
+        
+        return jsonify({
+            "alert": alert.to_dict()
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/alerts/<int:alert_id>/status', methods=['PUT'])
+def update_alert_status(alert_id):
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+        
+        alert = Alert.query.get(alert_id)
+        if not alert:
+            return jsonify({"error": "Alert not found"}), 404
+        
+        # Update fields if provided
+        if 'status' in data:
+            alert.status = data['status']
+        if 'acknowledged_by' in data:
+            alert.acknowledged_by = data['acknowledged_by']
+        if 'notes' in data:
+            alert.notes = data['notes']
+        
+        db.session.commit()
+        
+        # Broadcast update via WebSocket
+        socketio.emit('alert_updated', alert.to_dict(), namespace='/')
+        
+        return jsonify({
+            "message": "Alert updated successfully",
+            "alert": alert.to_dict()
+        })
+        
+    except Exception as e:
+        db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/telegram/test', methods=['GET'])
@@ -459,7 +707,8 @@ def test_telegram():
     return jsonify({
         "success": success,
         "message": message,
-        "telegram_enabled": telegram_bot.enabled
+        "telegram_enabled": telegram_bot.enabled,
+        "send_images": telegram_bot.send_images
     })
 
 @app.route('/api/telegram/status', methods=['GET'])
@@ -478,46 +727,9 @@ def list_species():
     return jsonify({
         "species": ANIMAL_SPECIES,
         "count": len(ANIMAL_SPECIES),
-        "telegram_enabled": telegram_bot.enabled
+        "telegram_enabled": telegram_bot.enabled,
+        "telegram_images": telegram_bot.send_images
     })
-
-@app.route('/api/alerts', methods=['GET'])
-def get_alerts():
-    try:
-        species = request.args.get('species')
-        category = request.args.get('category')
-        priority = request.args.get('priority')
-        min_confidence = request.args.get('min_confidence', type=float)
-        limit = request.args.get('limit', 50, type=int)
-        
-        query = Alert.query
-        
-        if species:
-            query = query.filter_by(species=species)
-        if category:
-            query = query.filter_by(category=category)
-        if priority:
-            query = query.filter_by(priority=priority)
-        if min_confidence:
-            query = query.filter(Alert.confidence >= min_confidence)
-        
-        alerts = query.order_by(Alert.timestamp.desc()).limit(limit).all()
-        
-        return jsonify({
-            "count": len(alerts),
-            "total": Alert.query.count(),
-            "filters": {
-                "species": species,
-                "category": category,
-                "priority": priority,
-                "min_confidence": min_confidence,
-                "limit": limit
-            },
-            "alerts": [alert.to_dict() for alert in alerts]
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/stats', methods=['GET'])
 def get_detailed_stats():
@@ -539,9 +751,19 @@ def get_detailed_stats():
             func.count(Alert.id)
         ).group_by(Alert.priority).all()
         
+        image_stats = db.session.query(
+            func.count(Alert.id).filter(Alert.has_image == True),
+            func.count(Alert.id).filter(Alert.has_image == False)
+        ).first()
+        
         twenty_four_hours_ago = datetime.utcnow() - timedelta(hours=24)
         recent_alerts = Alert.query.filter(
             Alert.timestamp >= twenty_four_hours_ago
+        ).count()
+        
+        recent_alerts_with_images = Alert.query.filter(
+            Alert.timestamp >= twenty_four_hours_ago,
+            Alert.has_image == True
         ).count()
         
         by_species = {species: count for species, count in species_counts}
@@ -553,6 +775,9 @@ def get_detailed_stats():
         return jsonify({
             "total_alerts": Alert.query.count(),
             "recent_24h": recent_alerts,
+            "alerts_with_images": image_stats[0] if image_stats else 0,
+            "alerts_without_images": image_stats[1] if image_stats else 0,
+            "recent_alerts_with_images": recent_alerts_with_images,
             "by_species": by_species,
             "by_category": by_category,
             "by_priority": by_priority,
@@ -560,13 +785,13 @@ def get_detailed_stats():
                 "species": most_common[0] if most_common else None,
                 "count": most_common[1] if most_common else 0
             },
-            "telegram_enabled": telegram_bot.enabled
+            "telegram_enabled": telegram_bot.enabled,
+            "telegram_images": telegram_bot.send_images
         })
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ========== WEBSOCKET EVENT HANDLERS ==========
 # ========== WEBSOCKET EVENT HANDLERS ==========
 @socketio.on('connect', namespace='/')
 def handle_connect():
@@ -631,8 +856,10 @@ def init_database():
     with app.app_context():
         db.create_all()
         alert_count = Alert.query.count()
+        image_count = Alert.query.filter(Alert.image_filename.isnot(None)).count()
         print("✅ Database initialized")
         print(f"📊 Total alerts in database: {alert_count}")
+        print(f"📸 Alerts with images: {image_count}")
 
 # ========== MAIN ==========
 if __name__ == '__main__':
@@ -642,28 +869,32 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     
     print("\n" + "="*70)
-    print("🚀 WILDLIFE ALERT SYSTEM v6.0 - WEB SOCKET REAL-TIME UPDATES")
+    print("🚀 WILDLIFE ALERT SYSTEM v7.0 - WITH IMAGE SUPPORT")
     print("="*70)
     print(f"📁 Database: wildlife_alerts.db")
+    print(f"🖼️ Image folder: {app.config['UPLOAD_FOLDER']}")
     print(f"🌐 HTTP API: http://localhost:{port}")
     print(f"🔌 WebSocket: ws://localhost:{port}/socket.io")
     print(f"🤖 Telegram: {'✅ ENABLED' if telegram_bot.enabled else '❌ DISABLED'}")
+    print(f"📸 Telegram Images: {'✅ ENABLED' if telegram_bot.send_images else '❌ DISABLED'}")
     print("="*70)
     
     if telegram_bot.enabled:
         print("\n📱 Telegram Configuration:")
         print(f"   Bot Token: {'✅ Set' if telegram_bot.token else '❌ Missing'}")
         print(f"   Chat ID: {'✅ Set' if telegram_bot.chat_id else '❌ Missing'}")
+        print(f"   Send Images: {'✅ Yes' if telegram_bot.send_images else '❌ No'}")
         print(f"   Test URL: http://localhost:{port}/api/telegram/test")
     
     print("\n📚 Test Endpoints:")
     print(f"  GET  http://localhost:{port}/health")
     print(f"  GET  http://localhost:{port}/api/telegram/status")
     print(f"  POST http://localhost:{port}/api/alert")
+    print(f"  GET  http://localhost:{port}/api/alerts?has_image=true")
     print("\n💡 Test WebSocket:")
     print("  1. Open React dashboard at http://localhost:5173")
-    print("  2. Send alert via Postman or 'Send Test Alert' button")
-    print("  3. Alert should appear instantly in dashboard")
+    print("  2. Send alert with image via Postman")
+    print("  3. Alert with image should appear instantly")
     print("="*70 + "\n")
     
     # Start server with SocketIO support
