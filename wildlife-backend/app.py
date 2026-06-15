@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
+from dotenv import load_dotenv
+load_dotenv()
 import os
 import requests
 import base64
@@ -34,33 +36,33 @@ socketio = SocketIO(app, cors_allowed_origins="*")  # Enable CORS for SocketIO
 # ========== ANIMAL SPECIES CONFIGURATION ==========
 ANIMAL_SPECIES = {
     # Wild Animals (High Priority)
-    'elephant': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🐘', 'danger': 'high'},
-    'tiger': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🐅', 'danger': 'high'},
-    'lion': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🦁', 'danger': 'high'},
-    'leopard': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🐆', 'danger': 'high'},
-    'bear': {'category': 'wildlife', 'priority': 'high', 'emoji': '🐻', 'danger': 'high'},
-    'wild_boar': {'category': 'wildlife', 'priority': 'high', 'emoji': '🐗', 'danger': 'medium'},
-    'deer': {'category': 'wildlife', 'priority': 'medium', 'emoji': '🦌', 'danger': 'low'},
-    'monkey': {'category': 'wildlife', 'priority': 'medium', 'emoji': '🐒', 'danger': 'low'},
-    'fox': {'category': 'wildlife', 'priority': 'medium', 'emoji': '🦊', 'danger': 'low'},
-    'wolf': {'category': 'wildlife', 'priority': 'high', 'emoji': '🐺', 'danger': 'high'},
+    'elephant': {'category': 'wildlife', 'priority': 'critical', 'danger': 'high'},
+    'tiger': {'category': 'wildlife', 'priority': 'critical', 'danger': 'high'},
+    'lion': {'category': 'wildlife', 'priority': 'critical', 'danger': 'high'},
+    'leopard': {'category': 'wildlife', 'priority': 'critical', 'danger': 'high'},
+    'bear': {'category': 'wildlife', 'priority': 'high', 'danger': 'high'},
+    'wild_boar': {'category': 'wildlife', 'priority': 'high', 'danger': 'medium'},
+    'deer': {'category': 'wildlife', 'priority': 'medium', 'danger': 'low'},
+    'monkey': {'category': 'wildlife', 'priority': 'medium', 'danger': 'low'},
+    'fox': {'category': 'wildlife', 'priority': 'medium', 'danger': 'low'},
+    'wolf': {'category': 'wildlife', 'priority': 'high', 'danger': 'high'},
     
     # Domestic Animals
-    'cow': {'category': 'livestock', 'priority': 'medium', 'emoji': '🐄', 'danger': 'low'},
-    'buffalo': {'category': 'livestock', 'priority': 'medium', 'emoji': '🐃', 'danger': 'low'},
-    'goat': {'category': 'livestock', 'priority': 'low', 'emoji': '🐐', 'danger': 'low'},
-    'sheep': {'category': 'livestock', 'priority': 'low', 'emoji': '🐑', 'danger': 'low'},
-    'dog': {'category': 'domestic', 'priority': 'low', 'emoji': '🐕', 'danger': 'low'},
-    'cat': {'category': 'domestic', 'priority': 'low', 'emoji': '🐈', 'danger': 'low'},
-    'horse': {'category': 'livestock', 'priority': 'medium', 'emoji': '🐎', 'danger': 'low'},
-    'donkey': {'category': 'livestock', 'priority': 'low', 'emoji': '🫏', 'danger': 'low'},
+    'cow': {'category': 'livestock', 'priority': 'medium', 'danger': 'low'},
+    'buffalo': {'category': 'livestock', 'priority': 'medium', 'danger': 'low'},
+    'goat': {'category': 'livestock', 'priority': 'low', 'danger': 'low'},
+    'sheep': {'category': 'livestock', 'priority': 'low', 'danger': 'low'},
+    'dog': {'category': 'domestic', 'priority': 'low', 'danger': 'low'},
+    'cat': {'category': 'domestic', 'priority': 'low', 'danger': 'low'},
+    'horse': {'category': 'livestock', 'priority': 'medium', 'danger': 'low'},
+    'donkey': {'category': 'livestock', 'priority': 'low', 'danger': 'low'},
     
     # Human
-    'human': {'category': 'human', 'priority': 'critical', 'emoji': '👤', 'danger': 'high'},
+    'human': {'category': 'human', 'priority': 'critical', 'danger': 'high'},
     
     # Unknown/Other
-    'unknown': {'category': 'unknown', 'priority': 'low', 'emoji': '❓', 'danger': 'unknown'},
-    'vehicle': {'category': 'vehicle', 'priority': 'medium', 'emoji': '🚗', 'danger': 'low'}
+    'unknown': {'category': 'unknown', 'priority': 'low', 'danger': 'unknown'},
+    'vehicle': {'category': 'vehicle', 'priority': 'medium', 'danger': 'low'}
 }
 
 # ========== TELEGRAM BOT CLASS ==========
