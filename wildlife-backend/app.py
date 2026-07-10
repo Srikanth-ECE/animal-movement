@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Tuple
 from werkzeug.utils import secure_filename
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
 # ========== CREATE FLASK APP ==========
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -36,33 +38,33 @@ socketio = SocketIO(app, cors_allowed_origins="*")  # Enable CORS for SocketIO
 # ========== ANIMAL SPECIES CONFIGURATION ==========
 ANIMAL_SPECIES = {
     # Wild Animals (High Priority)
-    'elephant': {'category': 'wildlife', 'priority': 'critical', 'danger': 'high'},
-    'tiger': {'category': 'wildlife', 'priority': 'critical', 'danger': 'high'},
-    'lion': {'category': 'wildlife', 'priority': 'critical', 'danger': 'high'},
-    'leopard': {'category': 'wildlife', 'priority': 'critical', 'danger': 'high'},
-    'bear': {'category': 'wildlife', 'priority': 'high', 'danger': 'high'},
-    'wild_boar': {'category': 'wildlife', 'priority': 'high', 'danger': 'medium'},
-    'deer': {'category': 'wildlife', 'priority': 'medium', 'danger': 'low'},
-    'monkey': {'category': 'wildlife', 'priority': 'medium', 'danger': 'low'},
-    'fox': {'category': 'wildlife', 'priority': 'medium', 'danger': 'low'},
-    'wolf': {'category': 'wildlife', 'priority': 'high', 'danger': 'high'},
+    'elephant': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🐘', 'danger': 'high'},
+    'lion': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🦁', 'danger': 'high'},
+    'tiger': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🐅', 'danger': 'high'},
+    'leopard': {'category': 'wildlife', 'priority': 'critical', 'emoji': '🐆', 'danger': 'high'},
+    'bear': {'category': 'wildlife', 'priority': 'high', 'emoji': '🐻', 'danger': 'high'},
+    'wild_boar': {'category': 'wildlife', 'priority': 'high', 'emoji': '🐗', 'danger': 'medium'},
+    'deer': {'category': 'wildlife', 'priority': 'medium', 'emoji': '🦌', 'danger': 'low'},
+    'monkey': {'category': 'wildlife', 'priority': 'medium', 'emoji': '🐒', 'danger': 'low'},
+    'fox': {'category': 'wildlife', 'priority': 'medium', 'emoji': '🦊', 'danger': 'low'},
+    'wolf': {'category': 'wildlife', 'priority': 'high', 'emoji': '🐺', 'danger': 'high'},
     
     # Domestic Animals
-    'cow': {'category': 'livestock', 'priority': 'medium', 'danger': 'low'},
-    'buffalo': {'category': 'livestock', 'priority': 'medium', 'danger': 'low'},
-    'goat': {'category': 'livestock', 'priority': 'low', 'danger': 'low'},
-    'sheep': {'category': 'livestock', 'priority': 'low', 'danger': 'low'},
-    'dog': {'category': 'domestic', 'priority': 'low', 'danger': 'low'},
-    'cat': {'category': 'domestic', 'priority': 'low', 'danger': 'low'},
-    'horse': {'category': 'livestock', 'priority': 'medium', 'danger': 'low'},
-    'donkey': {'category': 'livestock', 'priority': 'low', 'danger': 'low'},
+    'cow': {'category': 'livestock', 'priority': 'medium', 'emoji': '🐄', 'danger': 'low'},
+    'buffalo': {'category': 'livestock', 'priority': 'medium', 'emoji': '🐃', 'danger': 'low'},
+    'goat': {'category': 'livestock', 'priority': 'low', 'emoji': '🐐', 'danger': 'low'},
+    'sheep': {'category': 'livestock', 'priority': 'low', 'emoji': '🐑', 'danger': 'low'},
+    'dog': {'category': 'domestic', 'priority': 'low', 'emoji': '🐕', 'danger': 'low'},
+    'cat': {'category': 'domestic', 'priority': 'low', 'emoji': '🐈', 'danger': 'low'},
+    'horse': {'category': 'livestock', 'priority': 'medium', 'emoji': '🐎', 'danger': 'low'},
+    'donkey': {'category': 'livestock', 'priority': 'low', 'emoji': '🫏', 'danger': 'low'},
     
     # Human
-    'human': {'category': 'human', 'priority': 'critical', 'danger': 'high'},
+    'human': {'category': 'human', 'priority': 'critical', 'emoji': '👤', 'danger': 'high'},
     
     # Unknown/Other
-    'unknown': {'category': 'unknown', 'priority': 'low', 'danger': 'unknown'},
-    'vehicle': {'category': 'vehicle', 'priority': 'medium', 'danger': 'low'}
+    'unknown': {'category': 'unknown', 'priority': 'low', 'emoji': '❓', 'danger': 'unknown'},
+    'vehicle': {'category': 'vehicle', 'priority': 'medium', 'emoji': '🚗', 'danger': 'low'}
 }
 
 # ========== TELEGRAM BOT CLASS ==========
@@ -254,7 +256,7 @@ class TelegramBot:
             message += f"<a href='{google_maps}'>View on Google Maps</a>\n"
         
         # Add timestamp
-        timestamp = alert_data.get('timestamp', datetime.utcnow().isoformat())
+        timestamp = alert_data.get('timestamp', datetime.now(IST).isoformat())
         if isinstance(timestamp, str):
             try:
                 dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
@@ -288,7 +290,7 @@ class TelegramBot:
                     'lat': 12.9716,
                     'lng': 77.5946
                 },
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(IST).isoformat(),
                 'image_url': None
             }
             
@@ -309,7 +311,7 @@ telegram_bot = TelegramBot()
 class Alert(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     device_id = db.Column(db.String(100), nullable=False, default='unknown_device')
-    timestamp = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    timestamp = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(IST))
     species = db.Column(db.String(50), nullable=False)
     label = db.Column(db.String(50))
     confidence = db.Column(db.Float, nullable=False, default=0.0)
@@ -330,7 +332,7 @@ class Alert(db.Model):
         return {
             'id': self.id,
             'device_id': self.device_id,
-            'timestamp': self.timestamp.astimezone(timezone.utc).isoformat() if self.timestamp else None,
+            'timestamp': self.timestamp.astimezone(IST).isoformat() if self.timestamp else None,
             'detection': {
                 'species': self.species,
                 'label': self.label,
@@ -417,18 +419,23 @@ def get_species_info(species: str) -> Dict[str, Any]:
 def parse_pi_data(data: Dict[str, Any]) -> Dict[str, Any]:
     device_id = data.get('device_id', 'unknown_device')
     
-    timestamp_str = data.get('timestamp')
-    timestamp = datetime.now(timezone.utc)
-    
+    timestamp_str = data.get("timestamp")
+
     if timestamp_str:
         try:
-            if timestamp_str.endswith('Z'):
-                timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            timestamp = datetime.fromisoformat(timestamp_str)
+
+            if timestamp.tzinfo is None:
+              timestamp = timestamp.replace(tzinfo=IST)
             else:
-                local_dt = datetime.fromisoformat(timestamp_str)
-                timestamp = local_dt.astimezone(timezone.utc)
+              timestamp = timestamp.astimezone(IST)
+
         except Exception as e:
-            print(f"⚠️ Timestamp parse error: {e}")
+            print(f"Timestamp parse error: {e}")
+            timestamp = datetime.now(IST)
+
+    else:
+        timestamp = datetime.now(IST)
     
     detection = data.get('detection', {})
     raw_label = detection.get('label', 'unknown')
@@ -445,6 +452,7 @@ def parse_pi_data(data: Dict[str, Any]) -> Dict[str, Any]:
     
     has_image = bool(data.get('image_base64'))
     image_base64 = data.get('image_base64')
+
     
     return {
         'device_id': device_id,
@@ -502,7 +510,7 @@ def health_check():
             "image_storage": True,
             "alerts_in_db": alert_count,
             "alerts_with_images": image_count,
-            "time": datetime.utcnow().isoformat()
+            "time": datetime.now(IST).isoformat()
         })
     except Exception as e:
         return jsonify({"status": "unhealthy", "error": str(e)}), 500
@@ -758,7 +766,7 @@ def get_detailed_stats():
             func.count(Alert.id).filter(Alert.has_image == False)
         ).first()
         
-        twenty_four_hours_ago = datetime.utcnow() - timedelta(hours=24)
+        twenty_four_hours_ago = datetime.now(IST) - timedelta(hours=24)
         recent_alerts = Alert.query.filter(
             Alert.timestamp >= twenty_four_hours_ago
         ).count()
